@@ -1,49 +1,86 @@
-
-#include <opencv2/core.hpp>
-#include <opencv2/videoio.hpp>
-#include <opencv2/highgui.hpp>
-
 #include <iostream>
-#include <stdio.h>
+#include <unistd.h>
+#include <fstream>
+
+#include <opencv2/opencv.hpp>
+#include <nlohmann/json.hpp>
 
 using namespace cv;
 using namespace std;
+using json = nlohmann::json;
 
-int main(int, char**)
+string build_rtsp_url(const json& cfg)
 {
-    Mat frame;
-    //--- INITIALIZE VIDEOCAPTURE
-    VideoCapture cap;
-    // open the default camera using default API
-    // cap.open(0);
-    // OR advance usage: select any API backend
-    int deviceID = 0;             // 0 = open default camera
-    int apiID = cv::CAP_ANY;      // 0 = autodetect default API
-    // open selected camera using selected API
-    cap.open(deviceID, apiID);
-    // check if we succeeded
-    if (!cap.isOpened()) {
-        cerr << "ERROR! Unable to open camera\n";
+    string user = cfg.value("username", "");
+    string pass = cfg.value("password", "");
+    string ip   = cfg.value("camera_ip", "");
+    string path = cfg.value("path", "/axis-media/media.amp");
+
+    return "rtsp://" + user + ":" + pass + "@" + ip + path;
+}
+
+int main()
+{
+    // -------------------------
+    // Load config
+    // -------------------------
+    ifstream file("../config/camera.json");
+
+    if (!file)
+    {
+        cerr << "Failed to open config file" << endl;
         return -1;
     }
 
-    //--- GRAB AND WRITE LOOP
-    cout << "Start grabbing" << endl
-        << "Press any key to terminate" << endl;
-    for (;;)
+    json config;
+    file >> config;
+
+    string RTSP_URL = build_rtsp_url(config);
+
+    cout << "RTSP URL: " << RTSP_URL << endl;
+
+    // -------------------------
+    // Video capture
+    // -------------------------
+    VideoCapture capture;
+
+    while (true)
     {
-        // wait for a new frame from camera and store it into 'frame'
-        cap.read(frame);
-        // check if we succeeded
-        if (frame.empty()) {
-            cerr << "ERROR! blank frame grabbed\n";
-            break;
+        if (!capture.isOpened())
+        {
+            cout << "Connecting..." << endl;
+
+            capture.open(RTSP_URL, cv::CAP_FFMPEG);
+
+            if (!capture.isOpened())
+            {
+                cout << "Connection failed. Retrying in 5 seconds..." << endl;
+                sleep(5);
+                continue;
+            }
+
+            cout << "Connected." << endl;
         }
-        // show live and wait for a key with timeout long enough to show images
-        imshow("Live", frame);
-        if (waitKey(5) >= 0)
+
+        Mat frame;
+
+        if (!capture.read(frame))
+        {
+            cout << "Stream lost. Reconnecting..." << endl;
+
+            capture.release();
+            sleep(5);
+            continue;
+        }
+
+        imshow("RTSP Stream", frame);
+
+        if (waitKey(1) == 'q')
             break;
     }
-    // the camera will be deinitialized automatically in VideoCapture destructor
+
+    capture.release();
+    destroyAllWindows();
+
     return 0;
 }
